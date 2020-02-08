@@ -46,10 +46,10 @@ class ModelWrapper(object):
         return loss.item(), correct
 
     def train(self):
-        self.model.train()
+        return self.model.train()
 
     def eval(self):
-        self.model.eval()
+        return self.model.eval()
 
 
 

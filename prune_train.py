@@ -1,4 +1,4 @@
-from lib.ModelWrapper import ModelWrapper
+from lib.LotteryTicket import LotteryTicket
 from tensorboardX import SummaryWriter
 import torch
 from torchvision import transforms, datasets
@@ -13,8 +13,9 @@ train_itrs = 5000
 # eval
 eval_batch_size = 200
 eval_itrs = 200
-# init recorder
-init_record_itr = 0
+# prune
+mode = 'layer'
+prune_percent = 0.99
 
 if data_name == 'cifar10':
     dataset = datasets.CIFAR10
@@ -54,39 +55,35 @@ test_loader = torch.utils.data.DataLoader(test_data, batch_size=eval_batch_size,
 # build model
 device = torch.device("cuda" if torch.cuda.is_available() else 'cpu')
 model = model.to(device)
-
+# load the model
+save_path = os.path.join('runs', data_name, model_name)
+trained_weights = torch.load(os.path.join(save_path, 'ckpt_best.pkl'))['net']
+model.load_state_dict(trained_weights)
+# get init weights
+init_weights = torch.load(os.path.join(save_path, 'init_0.pkl'))['net']
+# set lottery ticket
 criterion = torch.nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
-wrapper = ModelWrapper(model, optimizer, criterion, device)
+LT = LotteryTicket(model, device, optimizer, criterion)
+masks = LT.get_mask_by_single_shot(prune_percent, mode)
+LT.train_init(masks, init_weights)
 
-# train the model
-save_path = os.path.join('runs', data_name, model_name)
-if not os.path.exists(save_path):
-    os.makedirs(save_path)
-writer = SummaryWriter(logdir=os.path.join(save_path, "log"))
+writer = SummaryWriter(logdir=os.path.join(save_path, "log_{}_{}".format(prune_percent, mode)))
 
 itr_index = 0
 best_test_acc = 0.
-wrapper.train()
+LT.train()
 
 while itr_index < train_itrs:
-
-    if itr_index == init_record_itr:    # record the init weights.
-        state = {
-            'net': model.state_dict(),
-            'itr': itr_index,
-        }
-        torch.save(state, os.path.join(save_path, "init_{}.pkl".format(itr_index)))
-
     # train loop
     for (inputs, targets) in train_loader:
-        loss, acc, _ = wrapper.train_on_batch(inputs, targets)
+        loss, acc, _ = LT.train_on_batch(inputs, targets)
         writer.add_scalar("train acc", acc, itr_index)
         writer.add_scalar("train loss", loss, itr_index)
         print("itr: {}/{}, loss={}, acc={}".format(itr_index+1, train_itrs, loss, acc))
         if itr_index % eval_itrs == 0:
-            wrapper.eval()
-            test_loss, test_acc = wrapper.eval_all(test_loader)
+            LT.eval()
+            test_loss, test_acc = LT.eval_all(test_loader)
             print("testing...")
             print("itr: {}/{}, loss={}, acc={}".format(itr_index+1, train_itrs, test_loss, test_acc))
             writer.add_scalar("test acc", test_acc, itr_index)
@@ -98,14 +95,14 @@ while itr_index < train_itrs:
                     'acc': test_acc,
                     'itr': itr_index,
                 }
-                torch.save(state, os.path.join(save_path, "ckpt_best.pkl"))
+                torch.save(state, os.path.join(save_path, "ckpt_best_{}_{}.pkl".format(prune_percent, mode)))
                 best_test_acc = test_acc
                 writer.flush()
 
             # return to train state.
-            wrapper.train()
+            LT.train()
 
         itr_index += 1
 
 writer.close()
-print("best_test_acc={}".format(best_test_acc))
+print("best_acc={}".format(best_test_acc))

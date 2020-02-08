@@ -4,17 +4,17 @@ import numpy as np
 
 class LotteryTicket(object):
     # fixme: we shouldn't mask BN layer or others, hence I have to filter layers
-    #  according to the shape of weights (which is not quite an ideal way). See _init_mask().
+    #  according to the shape of weights (which is not an ideal way). See _init_mask().
 
-    def __init__(self, model, device):
+    def __init__(self, model, device, optimizer=None, criterion=None, init_weights=None):
         self.model = model
-        self.init_weights = None
-        self.optimizer = None
-        self.criterion = torch.nn.CrossEntropyLoss()
+        self.init_weights = init_weights
+        self.optimizer = optimizer
+        self.criterion = criterion
         self.device = device
-        self.masks = self._init_mask()
+        self.masks = self._init_masks()
 
-    def _init_mask(self):
+    def _init_masks(self):
         masks = {}
         for name, param in self.model.named_parameters():
             # we don't prune the bias.
@@ -24,7 +24,7 @@ class LotteryTicket(object):
                     masks[name] = np.ones_like(tensor)
         return masks
 
-    def get_mask_by_single_shot(self, prune_percent=0.8, mode="global"):
+    def get_mask_by_single_shot(self, prune_percent, mode="global"):
         masks = {}
         if mode == 'layer':     # layer-wised pruning
             for name, param in self.model.named_parameters():
@@ -56,7 +56,41 @@ class LotteryTicket(object):
             raise Exception("The parameter mode must be \'layer\' or \'global\'!")
         return masks
 
+    def get_mask_by_iteration(self, prune_percent, mode="global"):
+        # TODO: finish this method.
+        masks = {}
+        if mode == 'layer':  # layer-wised pruning
+            for name, param in self.model.named_parameters():
+                # we don't prune the bias.
+                if 'weight' in name:
+                    if len(param.shape) >= 2:  # FC/Conv layer
+                        tensor = param.data.cpu().numpy()
+                        flat_tensor = tensor.ravel()
+                        threshold = np.percentile(np.abs(flat_tensor), 100 * prune_percent)
+                        masks[name] = np.where(np.abs(tensor) <= threshold, 0., 1.)
+        elif mode == 'global':  # global pruning
+            # get the threshold
+            all_weights = []
+            for name, param in self.model.named_parameters():
+                if 'weight' in name:
+                    if len(param.shape) >= 2:  # FC/Conv layer
+                        tensor = param.data.cpu().numpy()
+                        all_weights.append(tensor.ravel())
+            all_weights = np.concatenate(all_weights, axis=0)
+            threshold = np.percentile(np.abs(all_weights), 100 * prune_percent)
+            # get the mask
+            for name, param in self.model.named_parameters():
+                # we don't prune the bias.
+                if 'weight' in name:
+                    if len(param.shape) >= 2:  # FC/Conv layer
+                        tensor = param.data.cpu().numpy()
+                        masks[name] = np.where(np.abs(tensor) <= threshold, 0., 1.)
+        else:
+            raise Exception("The parameter mode must be \'layer\' or \'global\'!")
+        return masks
+
     def train_on_batch(self, inputs, targets):
+        inputs, targets = inputs.to(self.device), targets.to(self.device)
         self.optimizer.zero_grad()
         outputs = self.model(inputs)
         loss = self.criterion(outputs, targets)
@@ -72,7 +106,8 @@ class LotteryTicket(object):
         self.optimizer.step()
         _, predicted = outputs.max(1)
         correct = predicted.eq(targets).sum().item()
-        return loss.item(), correct
+        acc = correct / targets.size(0)
+        return loss.item(), acc, correct
 
     def eval_all(self, test_loader):
         self.model.eval()
@@ -81,6 +116,7 @@ class LotteryTicket(object):
         total = 0
         with torch.no_grad():
             for batch_idx, (inputs, targets) in enumerate(test_loader):
+                inputs, targets = inputs.to(self.device), targets.to(self.device)
                 loss, correct = self._eval_on_batch(inputs, targets)
                 total += targets.size(0)
                 test_loss += loss
@@ -97,28 +133,28 @@ class LotteryTicket(object):
         correct = predicted.eq(targets).sum().item()
         return loss.item(), correct
 
-    def train_init(self, masks, init_weights=None):
-        self.set_mask(masks)
+    def train_init(self, masks, init_weights):
+        self.set_masks(masks)
         self.set_init_weights(init_weights)
-        if init_weights is not None:    # if None, use random initialization.
-            self.model.load_state_dict(self.init_weights)
+        self.model.load_state_dict(self.init_weights)
+
         # prune
         for name, param in self.model.named_parameters():
             if 'weight' in name:
                 if len(param.shape) >= 2:  # FC/Conv layer
-                    weights_deviece = param.device
+                    weights_device = param.device
                     tensor = param.data.cpu().numpy()
                     tensor = tensor * masks[name]
-                    param.data = torch.from_numpy(tensor).to(weights_deviece, dtype=torch.float)
+                    param.data = torch.from_numpy(tensor).to(weights_device, dtype=torch.float)
         return self
 
     def train(self):
-        self.model.train()
+        return self.model.train()
 
     def eval(self):
-        self.model.eval()
+        return self.model.eval()
 
-    def set_mask(self, masks):
+    def set_masks(self, masks):
         self.masks = masks
         return self
 
