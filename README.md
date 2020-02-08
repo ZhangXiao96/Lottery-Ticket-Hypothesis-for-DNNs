@@ -1,27 +1,44 @@
 # Lottery Ticket Hypothesis for DNNs
 
 This repo provides an easy-to-use interface for searching the lottery ticket for pytorch models.
+
 Thanks for the help of this repo: [https://github.com/rahulvigneswaran/Lottery-Ticket-Hypothesis-in-Pytorch](https://github.com/rahulvigneswaran/Lottery-Ticket-Hypothesis-in-Pytorch)
 
 ## Related Papers
 
 @InProceedings{Frankle2018,
+
 author    = {Frankle, Jonathan and Carbin, Michael},
+
 title     = {The lottery ticket hypothesis: Finding sparse, trainable neural networks},
+
 booktitle = {Proc. Int'l Conf. on Learning Representations},
+
 year      = {2018},
+
 address   = {Vancouver, Canada},
+
 month     = may,
+
 }
 
+
 @Article{Frankle2019,
+
 author        = {Frankle, Jonathan and Dziugaite, G Karolina and Roy, DM and Carbin, M},
+
 title         = {Stabilizing the Lottery Ticket Hypothesis},
+
 journal       = {CoRR},
+
 year          = {2019},
+
 volume        = {abs/1903.01611},
+
 archiveprefix = {arXiv},
+
 url           = {http://arxiv.org/abs/1903.01611},
+
 }
 
 ## Requirements
