@@ -7,7 +7,7 @@ class LotteryTicket(object):
     # fixme: we shouldn't mask BN layer or others, hence I have to filter layers
     #  according to the shape of weights (which is not an ideal way). See _init_mask().
 
-    def __init__(self, model, device, optimizer=None, criterion=None, init_weights=None):
+    def __init__(self, model, device, optimizer=None, criterion=None, init_weights=None, masks=None):
         """
         NOTE: The model should be trained.
         :param model:  pytorch model
@@ -15,6 +15,7 @@ class LotteryTicket(object):
         :param optimizer: Not needed if you only use get_masks_by_single_shot())
         :param criterion: Not needed if you only use get_masks_by_single_shot())
         :param init_weights: the form model.state_dict(). Not needed if you only use get_masks_by_single_shot())
+        :param masks: {name:parameters}
         """
         self.model = model
         self.init_weights = copy.deepcopy(init_weights)
@@ -22,21 +23,16 @@ class LotteryTicket(object):
         self._optimizer_init = copy.deepcopy(self.optimizer.state_dict())
         self.criterion = criterion
         self.device = device
-        self.masks = self.init_masks()
+        self.masks = masks if masks else self.init_masks()
 
     def init_masks(self):
         masks = {}
-        for m in self.model.modules():
-            if isinstance(m, torch.nn.Conv2d) or isinstance(m, torch.nn.Linear):
-                for name, param in self.model.named_parameters():
-                    # we don't prune the bias.
-                    if 'weight' in name:
-                        if len(param.shape) == 2:   # FC layer
-                            tensor = param.data.cpu().numpy()
-                            masks[name] = np.ones_like(tensor)
-                        if len(param.shape) == 4:   # Conv2d layer
-                            tensor = param.data.cpu().numpy()
-                            masks[name] = np.ones_like(tensor)
+        for name, param in self.model.named_parameters():
+            # we don't prune the bias.
+            if 'weight' in name:
+                if len(param.shape) == [2, 4]:   # FC layer
+                    tensor = param.data.cpu().numpy()
+                    masks[name] = np.ones_like(tensor)
             return masks
 
     def get_masks_by_single_shot(self, conv_prune_percent, fc_prune_percent, mode="global"):
@@ -74,10 +70,12 @@ class LotteryTicket(object):
                     elif len(param.shape) == 4:   # Conv layer
                         tensor = param.data.cpu().numpy()
                         conv_all_weights.append(tensor.ravel())
-            fc_all_weights = np.concatenate(fc_all_weights, axis=0)
-            conv_all_weights = np.concatenate(conv_all_weights, axis=0)
-            fc_threshold = np.percentile(np.abs(fc_all_weights), 100 * fc_prune_percent)
-            conv_threshold = np.percentile(np.abs(conv_all_weights), 100 * conv_prune_percent)
+            if len(fc_all_weights) != 0:
+                fc_all_weights = np.concatenate(fc_all_weights, axis=0)
+                fc_threshold = np.percentile(np.abs(fc_all_weights), 100 * fc_prune_percent)
+            if len(conv_all_weights) != 0:
+                conv_all_weights = np.concatenate(conv_all_weights, axis=0)
+                conv_threshold = np.percentile(np.abs(conv_all_weights), 100 * conv_prune_percent)
             # get the mask
             for name, param in self.model.named_parameters():
                 # we don't prune the bias.
@@ -106,16 +104,17 @@ class LotteryTicket(object):
         re_mask = copy.deepcopy(self.masks)     # record init masks for reloading
         conv_accumulate_prune_percent = conv_prune_percent
         fc_accumulate_prune_percent = fc_prune_percent
-        masks = self.get_masks_by_single_shot(conv_accumulate_prune_percent, fc_accumulate_prune_percent, mode=mode)
-        for prune_percent in range(prune_itrs-1):
+        self.masks = self.get_masks_by_single_shot(conv_accumulate_prune_percent, fc_accumulate_prune_percent, mode=mode)
+        for id_itr in range(prune_itrs-1):
             conv_accumulate_prune_percent += conv_prune_percent
             fc_accumulate_prune_percent += fc_prune_percent
             self.train_init()
             self.train_all(train_loader, train_iter)
-            masks = self.self.get_masks_by_single_shot(conv_accumulate_prune_percent, fc_accumulate_prune_percent, mode=mode)
+            self.masks = self.get_masks_by_single_shot(conv_accumulate_prune_percent, fc_accumulate_prune_percent, mode=mode)
         # reload self.masks so that this method won't influence self.masks.
+        prune_mask = copy.deepcopy(self.masks)
         self.masks = re_mask
-        return masks
+        return prune_mask
 
     def train_on_batch(self, inputs, targets):
         inputs, targets = inputs.to(self.device), targets.to(self.device)
@@ -177,10 +176,10 @@ class LotteryTicket(object):
         return self
 
     def prune_weights(self):
-        # prune
+        # prune the initialization
         for name, param in self.model.named_parameters():
             if 'weight' in name:
-                if len(param.shape) >= 2:  # FC/Conv layer
+                if len(param.shape) in [2, 4]:  # FC/Conv layer
                     weights_device = param.device
                     tensor = param.data.cpu().numpy()
                     tensor = tensor * self.masks[name]

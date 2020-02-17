@@ -11,8 +11,7 @@ train_itrs = 5000
 # prune
 mode = 'layer'
 fc_prune_percent = 0.80
-conv_prune_percent = 0.90
-prune_itrs = 3
+prune_itr = 4
 # weights
 trained_weights_path = './save/trained_weights.pkl'
 init_weights_path = './save/init_weights.pkl'
@@ -44,11 +43,11 @@ LT = LotteryTicket(model, device, optimizer, criterion)
 
 # ======================= get masks =========================
 # get masks by single shot
-masks = LT.get_masks_by_single_shot(conv_prune_percent, fc_prune_percent, mode)
+masks = LT.get_masks_by_single_shot(0, fc_prune_percent, mode)
 
 # get masks by iteration
 LT.set_init_weights(init_weights)
-masks = LT.get_masks_by_iteration(prune_itrs, conv_prune_percent, fc_prune_percent, train_loader, train_itrs, mode)
+masks = LT.get_masks_by_iteration(prune_itr, 0, fc_prune_percent/prune_itr, train_loader, train_itrs, mode)
 
 
 # ================== if you want to train the model with masks ===================
