@@ -26,18 +26,24 @@ class LotteryTicket(object):
 
     def init_masks(self):
         masks = {}
-        for name, param in self.model.named_parameters():
-            # we don't prune the bias.
-            if 'weight' in name:
-                if len(param.shape) >= 2:   # FC/Conv layer
-                    tensor = param.data.cpu().numpy()
-                    masks[name] = np.ones_like(tensor)
-        return masks
+        for m in self.model.modules():
+            if isinstance(m, torch.nn.Conv2d) or isinstance(m, torch.nn.Linear):
+                for name, param in self.model.named_parameters():
+                    # we don't prune the bias.
+                    if 'weight' in name:
+                        if len(param.shape) == 2:   # FC layer
+                            tensor = param.data.cpu().numpy()
+                            masks[name] = np.ones_like(tensor)
+                        if len(param.shape) == 4:   # Conv2d layer
+                            tensor = param.data.cpu().numpy()
+                            masks[name] = np.ones_like(tensor)
+            return masks
 
-    def get_masks_by_single_shot(self, prune_percent, mode="global"):
+    def get_masks_by_single_shot(self, conv_prune_percent, fc_prune_percent, mode="global"):
         """
         Get masks by single shot pruning.
-        :param prune_percent: How many weights to prune. [0, 1]
+        :param conv_prune_percent: How many weights to prune for filters. [0, 1]
+        :param fc_prune_percent: How many weights to prune for fc layer. [0, 1]
         :param mode: "layer"/"global" for layer-wised/global pruning
         :return: the masks. Dict['param_name'] = 0/1 tensor
         """
@@ -46,49 +52,67 @@ class LotteryTicket(object):
             for name, param in self.model.named_parameters():
                 # we don't prune the bias.
                 if 'weight' in name:
-                    if len(param.shape) >= 2:   # FC/Conv layer
+                    if len(param.shape) == 2:   # FC layer
                         tensor = param.data.cpu().numpy()
                         flat_tensor = tensor.ravel()
-                        threshold = np.percentile(np.abs(flat_tensor), 100 * prune_percent)
+                        threshold = np.percentile(np.abs(flat_tensor), 100 * fc_prune_percent)
+                        masks[name] = np.where(np.abs(tensor) <= threshold, 0., 1.)
+                    elif len(param.shape) == 4:  # Conv layer
+                        tensor = param.data.cpu().numpy()
+                        flat_tensor = tensor.ravel()
+                        threshold = np.percentile(np.abs(flat_tensor), 100 * conv_prune_percent)
                         masks[name] = np.where(np.abs(tensor) <= threshold, 0., 1.)
         elif mode == 'global':  # global pruning
             # get the threshold
-            all_weights = []
+            fc_all_weights = []
+            conv_all_weights = []
             for name, param in self.model.named_parameters():
                 if 'weight' in name:
-                    if len(param.shape) >= 2:   # FC/Conv layer
+                    if len(param.shape) == 2:   # FC layer
                         tensor = param.data.cpu().numpy()
-                        all_weights.append(tensor.ravel())
-            all_weights = np.concatenate(all_weights, axis=0)
-            threshold = np.percentile(np.abs(all_weights), 100 * prune_percent)
+                        fc_all_weights.append(tensor.ravel())
+                    elif len(param.shape) == 4:   # Conv layer
+                        tensor = param.data.cpu().numpy()
+                        conv_all_weights.append(tensor.ravel())
+            fc_all_weights = np.concatenate(fc_all_weights, axis=0)
+            conv_all_weights = np.concatenate(conv_all_weights, axis=0)
+            fc_threshold = np.percentile(np.abs(fc_all_weights), 100 * fc_prune_percent)
+            conv_threshold = np.percentile(np.abs(conv_all_weights), 100 * conv_prune_percent)
             # get the mask
             for name, param in self.model.named_parameters():
                 # we don't prune the bias.
                 if 'weight' in name:
-                    if len(param.shape) >= 2:   # FC/Conv layer
+                    if len(param.shape) == 2:   # FC layer
                         tensor = param.data.cpu().numpy()
-                        masks[name] = np.where(np.abs(tensor) <= threshold, 0., 1.)
+                        masks[name] = np.where(np.abs(tensor) <= fc_threshold, 0., 1.)
+                    elif len(param.shape) == 4:  # Conv layer
+                        tensor = param.data.cpu().numpy()
+                        masks[name] = np.where(np.abs(tensor) <= conv_threshold, 0., 1.)
         else:
             raise Exception("The parameter mode must be \'layer\' or \'global\'!")
         return masks
 
-    def get_masks_by_iteration(self, prune_percents, train_loader, train_iter, mode="global"):
+    def get_masks_by_iteration(self, prune_itrs, fc_prune_percent, conv_prune_percent, train_loader, train_iter, mode="global"):
         """
         Get masks by iterative pruning.
-        :param prune_percents: lists. How many weights to prune for each iteration.
+        :param prune_itrs: iteration for pruning.
+        :param fc_prune_percent: How many weights (fc) to prune for each iteration.
+        :param conv_prune_percent: How many weights (conv) to prune for each iteration.
         :param train_loader: Data_Loader in pytorch.
         :param train_iter: Number of batches to train the model.
         :param mode: "layer"/"global" for layer-wised/global pruning
         :return: the masks. Dict['param_name'] = 0/1 tensor
         """
         re_mask = copy.deepcopy(self.masks)     # record init masks for reloading
-        accumulate_prune_percent = prune_percents[0]
-        masks = self.get_masks_by_single_shot(accumulate_prune_percent, mode=mode)
-        for prune_percent in prune_percents[1:]:
-            accumulate_prune_percent += prune_percent
+        conv_accumulate_prune_percent = conv_prune_percent
+        fc_accumulate_prune_percent = fc_prune_percent
+        masks = self.get_masks_by_single_shot(conv_accumulate_prune_percent, fc_accumulate_prune_percent, mode=mode)
+        for prune_percent in range(prune_itrs-1):
+            conv_accumulate_prune_percent += conv_prune_percent
+            fc_accumulate_prune_percent += fc_prune_percent
             self.train_init()
             self.train_all(train_loader, train_iter)
-            masks = self.get_masks_by_single_shot(accumulate_prune_percent, mode=mode)
+            masks = self.self.get_masks_by_single_shot(conv_accumulate_prune_percent, fc_accumulate_prune_percent, mode=mode)
         # reload self.masks so that this method won't influence self.masks.
         self.masks = re_mask
         return masks
