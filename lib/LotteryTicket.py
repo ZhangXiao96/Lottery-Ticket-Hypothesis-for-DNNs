@@ -92,12 +92,12 @@ class LotteryTicket(object):
             raise Exception("The parameter mode must be \'layer\' or \'global\'!")
         return masks
 
-    def get_masks_by_iteration(self, prune_itrs, fc_prune_percent, conv_prune_percent, train_loader, train_iter, mode="global"):
+    def get_masks_by_iteration(self, prune_itrs, conv_prune_percent, fc_prune_percent, train_loader, train_iter, mode="global"):
         """
         Get masks by iterative pruning.
         :param prune_itrs: iteration for pruning.
-        :param fc_prune_percent: How many weights (fc) to prune for each iteration.
         :param conv_prune_percent: How many weights (conv) to prune for each iteration.
+        :param fc_prune_percent: How many weights (fc) to prune for each iteration.
         :param train_loader: Data_Loader in pytorch.
         :param train_iter: Number of batches to train the model.
         :param mode: "layer"/"global" for layer-wised/global pruning
